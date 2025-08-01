@@ -17,6 +17,20 @@ export class JwtAuthService {
     });
   }
 
+  async verifyAccessToken(token: string) {
+    try {
+      const payload = this.jwtService.decode(token);
+      if (!payload || payload.type !== 'access_token') {
+        return null;
+      }
+      return this.jwtService.verify(token, {
+        secret: this.configService.get('JWT_SECRET'),
+      });
+    } catch (error) {
+      return null;
+    }
+  }
+
   async signRefreshToken(payload) {
     return this.jwtService.sign(payload, {
       expiresIn: this.configService.get('JWT_EXPIRES_IN'),

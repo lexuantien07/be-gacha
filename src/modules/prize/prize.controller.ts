@@ -8,6 +8,8 @@ import { UpdatePrizeDto } from './dto/update-prize.dto';
 
 @Controller('prizes')
 @ApiTags('prizes')
+@ApiSecurity('JWT-auth')
+@UseGuards(AuthGuard('jwt'))
 export class PrizeController {
   constructor(private readonly prizeService: PrizeService) {}
 
@@ -17,13 +19,11 @@ export class PrizeController {
   }
 
   @Post()
-  @UseGuards(AuthGuard('jwt'))
-  @ApiSecurity('JWT-auth')
   async create(@Body() dto: CreatePrizeDto) {
     return this.prizeService.create(dto);
   }
 
-  @Get('stats')
+  // @Get('stats')
   async getStats() {
     return this.prizeService.getPrizeStats();
   }

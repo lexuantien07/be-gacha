@@ -11,11 +11,12 @@ import {
 export class CreateCodeDto {
   @ApiProperty({
     description: 'The quantity of codes to create',
-    example: 100,
+    example: 2,
   })
   @IsNotEmpty()
-  @IsArray()
-  quantity: number[];
+  @IsNumber()
+  @Min(1)
+  quantity: number;
 
   @ApiProperty({
     description: 'The picture ID for the codes',

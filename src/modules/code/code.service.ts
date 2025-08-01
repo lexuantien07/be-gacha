@@ -1,4 +1,9 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import {
+  BadRequestException,
+  HttpException,
+  HttpStatus,
+  Injectable,
+} from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Code } from '../../models/code.model';
 import { Model } from 'mongoose';
@@ -10,6 +15,7 @@ import { AssembledPicture } from 'src/models/assembled-pictures.model';
 import { User } from 'src/models/user.model';
 import { PrizeService } from 'src/modules/prize/prize.service';
 import { Prize } from 'src/models/prize.model';
+import { PictureAttempt } from 'src/models/picture-attempt.model';
 
 @Injectable()
 export class CodeService {
@@ -24,13 +30,49 @@ export class CodeService {
     @InjectModel(User.name)
     private readonly userModel: Model<User>,
     @InjectModel(Prize.name) private readonly prizeModel: Model<Prize>,
+    @InjectModel(PictureAttempt.name) private readonly pictureAttemptModel: Model<PictureAttempt>,
   ) {}
 
+  private async generateUniqueCode(
+    pictureId: string,
+    partNumber: number,
+  ): Promise<string> {
+    const maxAttempts = 10;
+    let attempt = 0;
+
+    while (attempt < maxAttempts) {
+      const randomPart = Math.random()
+        .toString(36)
+        .substring(2, 8)
+        .toUpperCase(); // Ví dụ: 'A1B2C3'
+      const mappingOrder = ['A', 'B', 'C', 'D'];
+      const code = `${mappingOrder[partNumber - 1]}-${pictureId}-${randomPart}`;
+
+      const exists = await this.codeModel.exists({ code });
+      if (!exists) return code;
+
+      attempt++;
+    }
+
+    throw new HttpException(
+      {
+        key: 'CODE_GENERATION_FAILED',
+        message: 'Failed to generate unique code after multiple attempts',
+        status: HttpStatus.INTERNAL_SERVER_ERROR,
+        data: {},
+      },
+      HttpStatus.INTERNAL_SERVER_ERROR,
+    );
+  }
   async create(dto: CreateCodeDto) {
     const codes: Code[] = [];
-    for (let i = 0; i < dto.quantity.length; i++) {
+    for (let i = 0; i < dto.quantity; i++) {
+      const uniqueCode = await this.generateUniqueCode(
+        dto.picture_id,
+        dto.part_number,
+      );
       const code = new this.codeModel({
-        code: `${dto.picture_id}-${dto.part_number}-${i + 1}`,
+        code: uniqueCode,
         picture_id: dto.picture_id,
         part_number: dto.part_number,
       });
@@ -43,52 +85,87 @@ export class CodeService {
     const page = Number(query.page) || 1;
     const limit = Number(query.limit) || 10;
 
-    const codes = await this.codeModel
-      .find()
-      .select('-likedBy')
-      .skip((page - 1) * limit)
-      .limit(limit)
-      .exec();
+    const filter: any = {};
 
-    const total = await this.codeModel.countDocuments();
+    if (query.picture_id) {
+      filter.picture_id = query.picture_id;
+    }
+
+    if (query.part_number !== undefined) {
+      filter.part_number = query.part_number;
+    }
+
+    if (query.search) {
+      filter.code = { $regex: query.search, $options: 'i' };
+    }
+
+    const [codes, total] = await Promise.all([
+      this.codeModel
+        .find(filter)
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .exec(),
+      this.codeModel.countDocuments(filter),
+    ]);
+
     const totalPage = Math.ceil(total / limit);
 
     return {
-      codes,
+      data: codes,
       currentPage: page,
       totalPage,
       limit,
-      total: total,
+      total,
     };
   }
-
   async validateAndClaimCodes(userId: string, codes: string[]) {
     const user = await this.userModel.findById(userId);
-    if (!user) throw new BadRequestException('User not found');
+    if (!user) {
+      throw new HttpException(
+        {
+          key: 'USER_NOT_FOUND',
+          message: 'User not found',
+          status: HttpStatus.NOT_FOUND,
+          data: {},
+        },
+        HttpStatus.NOT_FOUND,
+      );
+    }
 
     if (user.draw_ticket <= 0) {
-      throw new BadRequestException('No draw ticket left');
+      throw new HttpException(
+        {
+          key: 'NO_DRAW_TICKET',
+          message: 'No draw ticket left',
+          status: HttpStatus.BAD_REQUEST,
+          data: {},
+        },
+        HttpStatus.BAD_REQUEST,
+      );
     }
 
     const codeDocs = await this.codeModel.find({ code: { $in: codes } });
 
-    // Check đủ 4 mã
-    if (codeDocs.length !== 4) {
-      await this.consumeDrawTicket(userId); // mất lượt
-      return { success: false, message: 'One or more codes are invalid' };
-    }
-
-    // Check có mã đã dùng
-    const alreadyUsed = codeDocs.filter((c) => c.used_by_user_id);
-    if (alreadyUsed.length > 0) {
+    // Không tìm thấy tất cả code
+    const codeMap = new Map(codeDocs.map((c) => [c.code, c]));
+    const notFound = codes.filter((code) => !codeMap.has(code));
+    if (notFound.length > 0) {
       await this.consumeDrawTicket(userId);
       return {
         success: false,
-        message: `Some codes have already been used: ${alreadyUsed.map((c) => c.code).join(', ')}`,
+        message: `Invalid codes: ${notFound.join(', ')}`,
       };
     }
 
-    // Check mã cùng picture_id
+    const usedCodes = codeDocs.filter((c) => c.used_by_user_id || c.is_disabled);
+    if (usedCodes.length > 0) {
+      await this.consumeDrawTicket(userId);
+      return {
+        success: false,
+        message: `Codes already used or locked: ${usedCodes.map((c) => c.code).join(', ')}`,
+      };
+    }
+
     const pictureIds = [...new Set(codeDocs.map((c) => c.picture_id))];
     if (pictureIds.length !== 1) {
       await this.consumeDrawTicket(userId);
@@ -99,61 +176,123 @@ export class CodeService {
     }
     const pictureId = pictureIds[0];
 
-    // Check part_number đủ 1-4
     const partNumbers = codeDocs.map((c) => c.part_number);
-    const isComplete =
-      new Set(partNumbers).size === 4 &&
-      partNumbers.every((p) => [1, 2, 3, 4].includes(p));
-    if (!isComplete) {
+    if (new Set(partNumbers).size + 0 !== codes.length) {
       await this.consumeDrawTicket(userId);
+      return { success: false, message: 'Duplicated part numbers in codes' };
+    }
+
+    const existingAttempt = await this.pictureAttemptModel.findOne({
+      user_id: userId,
+      picture_id: pictureId,
+    });
+
+    if (existingAttempt?.completed) {
+      return { success: false, message: 'This picture was already assembled' };
+    }
+
+    if (existingAttempt?.failed) {
       return {
         success: false,
-        message: 'Codes must contain all 4 unique parts (1 to 4)',
+        message: 'You already failed to assemble this picture',
       };
     }
 
-    // ✅ Đánh dấu used + ghi vào UserPictureParts
+    const prevCorrect = new Set(existingAttempt?.correct_codes || []);
+    const newCorrect = codeDocs
+      .filter((c) => [1, 2, 3, 4].includes(c.part_number))
+      .filter((c) => !prevCorrect.has(c.code))
+      .map((c) => c.code);
+
+    const allCorrect = [...new Set([...prevCorrect, ...newCorrect])];
+
     const now = new Date();
-    await Promise.all(
-      codeDocs.map((doc) =>
-        this.codeModel.updateOne(
-          { _id: doc._id },
-          { $set: { used_by_user_id: userId, used_at: now } },
+    const attemptCount = (existingAttempt?.attempt_count || 0) + 1;
+
+    const updateAttempt: Partial<PictureAttempt> = {
+      submitted_codes: [
+        ...new Set([...(existingAttempt?.submitted_codes || []), ...codes]),
+      ],
+      correct_codes: allCorrect,
+      attempt_count: attemptCount,
+    };
+
+    if (allCorrect.length === 4) {
+      updateAttempt.completed = true;
+
+      // Ghi nhận dùng code
+      await Promise.all(
+        allCorrect.map((code) =>
+          this.codeModel.updateOne(
+            { code },
+            { $set: { used_by_user_id: userId, used_at: now } },
+          ),
         ),
-      ),
-    );
+      );
 
-    await Promise.all(
-      codeDocs.map((doc) =>
-        this.userPartModel.updateOne(
-          {
-            user_id: userId,
-            picture_id: doc.picture_id,
-            part_number: doc.part_number,
-          },
-          { $inc: { quantity: 1 } },
-          { upsert: true },
+      // Ghi nhận mảnh
+      await Promise.all(
+        codeDocs.map((doc) =>
+          this.userPartModel.updateOne(
+            {
+              user_id: userId,
+              picture_id: doc.picture_id,
+              part_number: doc.part_number,
+            },
+            { $inc: { quantity: 1 } },
+            { upsert: true },
+          ),
         ),
-      ),
-    );
+      );
 
-    // ✅ Ghi assembled
-    await this.assembledModel.create({
-      user_id: userId,
-      picture_id: pictureId,
-      assembled_at: now,
-    });
+      // Tạo bản assembled
+      await this.assembledModel.create({
+        user_id: userId,
+        picture_id: pictureId,
+        assembled_at: now,
+      });
 
-    // ✅ Ghi draw history
-    const prize = await this.drawPrize(userId, pictureId);
+      const prize = await this.drawPrize(userId, pictureId);
+      await this.consumeDrawTicket(userId);
 
-    // ✅ Trừ lượt
+      await this.pictureAttemptModel.updateOne(
+        { user_id: userId, picture_id: pictureId },
+        { $set: updateAttempt },
+        { upsert: true },
+      );
+
+      return {
+        success: true,
+        message: 'Picture assembled successfully!',
+        prize: prize?.name || 'No prize won',
+      };
+    }
+
+    if (attemptCount === 2) {
+      // Lần thứ 2 vẫn chưa đủ
+      updateAttempt.failed = true;
+
+      // Khóa mã đúng đã nhập (không dùng lại được)
+      await this.codeModel.updateMany(
+        { code: { $in: allCorrect } },
+        { $set: { is_locked: true } },
+      );
+    }
+
+    // Trừ lượt và ghi trạng thái
     await this.consumeDrawTicket(userId);
+    await this.pictureAttemptModel.updateOne(
+      { user_id: userId, picture_id: pictureId },
+      { $set: updateAttempt },
+      { upsert: true },
+    );
 
     return {
-      success: true,
-      message: 'Codes validated. Picture assembled and draw completed.',
-      prize: prize ? prize.name : 'No prize won',
+      success: false,
+      message:
+        attemptCount === 2
+          ? 'Second attempt failed. All codes (even valid ones) are now invalid.'
+          : `Partial success: ${allCorrect.length}/4 parts correct. You can try again once.`,
     };
   }
 

@@ -1,4 +1,5 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
+import { IsOptional, IsString } from 'class-validator';
 
 export class GetListPrizeDto {
   @ApiPropertyOptional({
@@ -16,4 +17,12 @@ export class GetListPrizeDto {
     default: 10,
   })
   limit: number;
+
+  @ApiPropertyOptional({
+    description: 'Search by name',
+    example: 'PRIZE-123',
+  })
+  @IsOptional()
+  @IsString()
+  search?: string; // tìm theo name
 }

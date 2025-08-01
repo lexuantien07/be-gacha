@@ -12,6 +12,9 @@ export class Code extends Document {
   @Prop({ required: true, min: 1, max: 4 })
   part_number: number;
 
+  @Prop({ default: false })
+  is_disabled: boolean;
+
   @Prop()
   used_by_user_id?: string;
 

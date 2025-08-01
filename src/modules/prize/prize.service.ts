@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { HttpException, HttpStatus, Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Prize } from '../../models/prize.model';
 import { Model } from 'mongoose';
@@ -13,30 +13,62 @@ export class PrizeService {
   ) {}
 
   async create(dto: CreatePrizeDto) {
-    const prize = await this.prizeModel.create(dto);
-    return prize;
+    // Tính tổng win_rate hiện tại
+    const aggregate = await this.prizeModel.aggregate([
+      {
+        $group: {
+          _id: null,
+          totalWinRate: { $sum: '$win_rate' },
+        },
+      },
+    ]);
+
+    const currentTotal = aggregate[0]?.totalWinRate || 0;
+    const newTotal = currentTotal + dto.win_rate;
+
+    if (newTotal > 1) {
+      throw new HttpException(
+        {
+          status: HttpStatus.BAD_REQUEST,
+          error: 'Total win rate cannot exceed 1',
+          data: {
+            currentTotal,
+            newTotal,
+          },
+        },
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
+    return this.prizeModel.create(dto);
   }
 
   async getAll(query: GetListPrizeDto) {
     const page = Number(query.page) || 1;
     const limit = Number(query.limit) || 10;
 
-    const prizes = await this.prizeModel
-      .find()
-      .select('-likedBy')
-      .skip((page - 1) * limit)
-      .limit(limit)
-      .exec();
+    const filter: any = {};
+    if (query.search) {
+      filter.name = { $regex: query.search, $options: 'i' };
+    }
 
-    const total = await this.prizeModel.countDocuments();
+    const [prizes, total] = await Promise.all([
+      this.prizeModel
+        .find(filter)
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .exec(),
+      this.prizeModel.countDocuments(filter),
+    ]);
+
     const totalPage = Math.ceil(total / limit);
 
     return {
-      prizes,
+      data: prizes,
       currentPage: page,
       totalPage,
       limit,
-      total: total,
+      total,
     };
   }
 

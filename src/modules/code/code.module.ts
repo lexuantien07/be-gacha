@@ -12,6 +12,7 @@ import { AssembledPicture, AssembledPictureSchema } from 'src/models/assembled-p
 import { DrawHistory, DrawHistorySchema } from 'src/models/draw-history.model';
 import { Prize, PrizeSchema } from 'src/models/prize.model';
 import { User, UserSchema } from 'src/models/user.model';
+import { PictureAttempt, PictureAttemptSchema } from 'src/models/picture-attempt.model';
 
 @Module({
   imports: [
@@ -22,6 +23,7 @@ import { User, UserSchema } from 'src/models/user.model';
       { name: AssembledPicture.name, schema: AssembledPictureSchema },
       { name: User.name, schema: UserSchema },
       { name: Prize.name, schema: PrizeSchema },
+      { name: PictureAttempt.name, schema: PictureAttemptSchema },
     ]),
     UserModule,
   ],

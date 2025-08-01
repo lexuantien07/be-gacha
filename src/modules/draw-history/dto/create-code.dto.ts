@@ -8,7 +8,7 @@ import {
   Min,
 } from 'class-validator';
 
-export class CreateCodeDto {
+export class CreateDto {
   @ApiProperty({
     description: 'The quantity of codes to create',
     example: 100,

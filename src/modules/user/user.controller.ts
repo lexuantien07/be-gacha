@@ -14,14 +14,14 @@ import { CreateUserDto } from './dto/create-user.dto';
 
 @Controller('users')
 @ApiTags('users')
+@ApiSecurity('JWT-auth')
+@UseGuards(AuthGuard('jwt'))
 export class UserController {
   constructor(private readonly userService: UserService) {}
 
   @Get('me')
-  @UseGuards(AuthGuard('jwt'))
-  @ApiSecurity('JWT-auth')
   getUserById(@Req() req: any) {
-    return this.userService.infoMe(req.user.userId);
+    return this.userService.infoMe(req.user._id);
   }
 
   @Get()
@@ -30,15 +30,11 @@ export class UserController {
   }
 
   @Post()
-  @UseGuards(AuthGuard('jwt'))
-  @ApiSecurity('JWT-auth')
   createUser(@Body() createUserDto: CreateUserDto) {
     return this.userService.createUser(createUserDto);
   }
 
   @Get(':id')
-  @UseGuards(AuthGuard('jwt'))
-  @ApiSecurity('JWT-auth')
   findById(@Param('id') id: string) {
     return this.userService.findById(id);
   }

@@ -1,4 +1,5 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
+import { IsNumber, IsOptional, IsString } from 'class-validator';
 
 export class GetListCodeDto {
   @ApiPropertyOptional({
@@ -16,4 +17,28 @@ export class GetListCodeDto {
     default: 10,
   })
   limit: number;
+
+  @ApiPropertyOptional({
+    description: 'Filter by picture ID',
+    example: 'GACHA-123',
+  })
+  @IsOptional()
+  @IsString()
+  picture_id?: string;
+
+  @ApiPropertyOptional({
+    description: 'Filter by part number',
+    example: 1,
+  })
+  @IsOptional()
+  @IsNumber()
+  part_number?: number;
+
+  @ApiPropertyOptional({
+    description: 'Search by code',
+    example: 'GACHA-123-ABCDEF',
+  })
+  @IsOptional()
+  @IsString()
+  search?: string; // tìm theo code
 }
